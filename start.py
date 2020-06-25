@@ -5,6 +5,7 @@ import os, sys
 import json
 from time import sleep
 import subprocess
+import shutil
 
 # выдать 64 байтовую строку
 def generateRandomString(stringLength=64):
@@ -16,7 +17,7 @@ def generateRandomBytes(n=1024):
     return bytearray(random.getrandbits(8) for i in range(n))
 
 # разбить имя файла на папки и остаток имени
-def separateString(string, folders='', deep=4, step=2):
+def separateString(string, folders='', deep=2, step=2):
     if len(string) < deep * step: return False
     if deep == 0: return {'folders': folders, 'filename': string}
     else:
@@ -69,6 +70,8 @@ def generateRandomRemoveQueueList(seed):
     return fileList
 
 def saveStats():
+    if os.path.exists(configFile):
+        shutil.copyfile(configFile, configFile + '.bak') #copy src to dst
     with open(configFile, 'w') as outfile:
         json.dump(stats, outfile)
     outfile.close()
@@ -77,9 +80,7 @@ def loadStats():
     global stats
     with open(configFile, 'r') as infile:
         data = json.load(infile)
-    print('data:', data)
     stats.update(data)
-    printStats()
     infile.close()
 
 def initVars():
@@ -91,9 +92,7 @@ def initVars():
     global stats
     global configFile
     configFile = os.path.join(os.getcwd() + os.path.sep + poolName + '.zft')
-#    getMountPointCmd = 'zfs list -H -o mountpoint ' + poolName
-#    p = subprocess.Popen(getMountPointCmd, shell=True, stdout=subprocess.PIPE)
-#    stats['mountpoint'] = p.stdout.read()
+
     stats['cycleNumber'] = 1
     stats['filesWrittenCount'] = 0
     stats['filesDeletedCount'] = 0
@@ -106,35 +105,39 @@ def initVars():
     maxFileSize = 2049 #kb
     global createdRandomBytes
     createdRandomBytes = generateRandomBytes(maxFileSize * 1024)
+    getMountPointCmd = 'zfs list -H -o mountpoint ' + poolName
+    p = subprocess.Popen(getMountPointCmd, shell=True, stdout=subprocess.PIPE)
+    mountpoint = p.stdout.read().decode("utf-8").rstrip()
     global dataFolderName
-    dataFolderName = os.path.join(os.getcwd() + os.path.sep + 'data')
+    dataFolderName = os.path.join(mountpoint + os.path.sep + 'zfs-fragmentation-test-data')
     global filesQueueSize
-    filesQueueSize = 10
+    filesQueueSize = 111
     global fileRemovePercent
     fileRemovePercent = 0.3
 
 def firstRun():
     if not os.path.exists(configFile):
+        print('this is first run\n')
         return True
     else:
+        print('previous run was detected, continue filling up the pool\n')
         return False
 
 def printStats():
-#    print(stats)
+
     print(
     'fWC:', stats['filesWrittenCount'],
     'fDC:', stats['filesDeletedCount'],
     'bWC:', stats['bytesWrittenCount'],
-    'bDC:', stats['bytesDeletedCount']#, end="\r"
+    'bDC:', stats['bytesDeletedCount'],
+     end="\r"
     )
 
 
 stats = {}
 initVars()
-printStats()
 if not firstRun():
     loadStats()
-sleep(2)
 
 while True:
     rangeBegin = (stats['cycleNumber'] - 1) * filesQueueSize + 1
@@ -144,8 +147,6 @@ while True:
         if bytesWritten:
             stats['bytesWrittenCount'] += bytesWritten
             stats['filesWrittenCount'] += 1
-            sleep(0.01)
-#    print('seed for remove:', stats['cycleNumber'])
     removeList = generateRandomRemoveQueueList(stats['cycleNumber'])
     if removeList:
         for item in removeList:
@@ -153,8 +154,7 @@ while True:
             if bytesDeleted:
                 stats['bytesDeletedCount'] += bytesDeleted
                 stats['filesDeletedCount'] += 1
-#                print(item, bytesDeleted, stats['bytesDeletedCount'])
     stats['cycleNumber'] += 1
     saveStats()
     printStats()
-    sleep(1)
+    #sleep(1)
