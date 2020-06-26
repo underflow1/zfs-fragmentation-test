@@ -3,9 +3,10 @@ import random
 import string
 import os, sys
 import json
-from time import sleep
+import time
 import subprocess
 import shutil
+import math
 
 # выдать 64 байтовую строку
 def generateRandomString(stringLength=64):
@@ -17,7 +18,7 @@ def generateRandomBytes(n=1024):
     return bytearray(random.getrandbits(8) for i in range(n))
 
 # разбить имя файла на папки и остаток имени
-def separateString(string, folders='', deep=2, step=2):
+def separateString(string, folders='', deep=2, step=1):
     if len(string) < deep * step: return False
     if deep == 0: return {'folders': folders, 'filename': string}
     else:
@@ -43,7 +44,7 @@ def touchFileFromSeed(seed):
             f.close()
         except OSError:
             print ("Creation of the file %s failed" % currentFileMetadata['filename'])
-            return False
+            exit(0)
     return currentFileSize
 
 # удалить файл по номеру
@@ -66,7 +67,7 @@ def generateRandomRemoveQueueList(seed):
     fileList = []
     filesToRemoveCount = int(filesQueueSize * fileRemovePercent)
     for i in range(0, filesToRemoveCount):
-        fileList.append(random.randint(1, filesQueueSize * (seed - 1)))
+        fileList.append(random.randint(filesQueueSize * (seed - 3), filesQueueSize * (seed - 2)))
     return fileList
 
 def saveStats():
@@ -84,6 +85,7 @@ def loadStats():
     infile.close()
 
 def initVars():
+    global poolName
     try:
         poolName = sys.argv[1]
     except Exception as e:
@@ -92,7 +94,6 @@ def initVars():
     global stats
     global configFile
     configFile = os.path.join(os.getcwd() + os.path.sep + poolName + '.zft')
-
     stats['cycleNumber'] = 1
     stats['filesWrittenCount'] = 0
     stats['filesDeletedCount'] = 0
@@ -111,9 +112,12 @@ def initVars():
     global dataFolderName
     dataFolderName = os.path.join(mountpoint + os.path.sep + 'zfs-fragmentation-test-data')
     global filesQueueSize
-    filesQueueSize = 111
+    filesQueueSize = 100
     global fileRemovePercent
     fileRemovePercent = 0.3
+    global minFreeSpace
+    # трехкратный запас места относительно максимального размера пачки. на всякий случай
+    minFreeSpace = maxFileSize * filesQueueSize * 1024 * 3
 
 def firstRun():
     if not os.path.exists(configFile):
@@ -123,30 +127,59 @@ def firstRun():
         print('previous run was detected, continue filling up the pool\n')
         return False
 
+def formatSize(size):
+    "Formats size to be displayed in the most fitting unit"
+    power = math.floor((len(str(abs(int(size))))-1)/3)
+    units = {
+            0: " B",
+            1: "KB",
+            2: "MB",
+            3: "GB",
+            4: "TB",
+            5: "PB",
+            6: "EB",
+            7: "ZB",
+            8: "YB"
+        }
+    unit = units.get(power)
+    sizeForm = size / (1000.00**power)
+    return "{:3.2f} {}".format(sizeForm, unit)
+
+def freeSpaceExists():
+    getFreeSpaceCmd = 'zfs list -Hp -o available ' + poolName
+    p = subprocess.Popen(getFreeSpaceCmd, shell=True, stdout=subprocess.PIPE)
+    freeSpace = int(p.stdout.read().decode("utf-8").rstrip())
+    if freeSpace < minFreeSpace:
+        return False
+    else:
+        return True
+
 def printStats():
+    print("\033[2;3HHello")
+    print('Файлов создано:', stats['filesWrittenCount'], '  Удалено:', stats['filesDeletedCount'])
+    print('Байтов записано:', formatSize(stats['bytesWrittenCount']), ' Удалено:', formatSize(stats['bytesDeletedCount']))
+    print('ИТОГО ЗАПИСАНО СЕЙЧАС:', formatSize(stats['bytesWrittenCount'] - stats['bytesDeletedCount']))
 
-    print(
-    'fWC:', stats['filesWrittenCount'],
-    'fDC:', stats['filesDeletedCount'],
-    'bWC:', stats['bytesWrittenCount'],
-    'bDC:', stats['bytesDeletedCount'],
-     end="\r"
-    )
-
-
+clear = lambda: os.system('clear')
+clear()
 stats = {}
 initVars()
 if not firstRun():
     loadStats()
 
 while True:
+    if not freeSpaceExists():
+        print('Free space is ended. Finishing')
+        exit(0)
     rangeBegin = (stats['cycleNumber'] - 1) * filesQueueSize + 1
     rangeEnd = stats['cycleNumber'] * filesQueueSize + 1
+
     for i in range(rangeBegin, rangeEnd):
         bytesWritten = touchFileFromSeed(i)
         if bytesWritten:
             stats['bytesWrittenCount'] += bytesWritten
             stats['filesWrittenCount'] += 1
+
     removeList = generateRandomRemoveQueueList(stats['cycleNumber'])
     if removeList:
         for item in removeList:
@@ -154,7 +187,7 @@ while True:
             if bytesDeleted:
                 stats['bytesDeletedCount'] += bytesDeleted
                 stats['filesDeletedCount'] += 1
+
     stats['cycleNumber'] += 1
     saveStats()
     printStats()
-    #sleep(1)
