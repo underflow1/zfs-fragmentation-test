@@ -116,8 +116,11 @@ def initVars():
     global fileRemovePercent
     fileRemovePercent = 0.3
     global minFreeSpace
-    # трехкратный запас места относительно максимального размера пачки. на всякий случай
-    minFreeSpace = maxFileSize * filesQueueSize * 1024 * 3
+    # заканчивать когда будет гиг свободного места
+    minFreeSpace = 1073741824
+    global resultsFile
+    resultsFile = open(os.getcwd() + os.path.sep + 'results.zfs', 'a+')
+
 
 def firstRun():
     if not os.path.exists(configFile):
@@ -167,6 +170,7 @@ initVars()
 if not firstRun():
     loadStats()
 
+cycleStartTime = time.time()
 while True:
     if not freeSpaceExists():
         print('Free space is ended. Finishing')
@@ -191,3 +195,18 @@ while True:
     stats['cycleNumber'] += 1
     saveStats()
     printStats()
+cycleFinishTime = time.time()
+cycleElapsedTime = cycleFinishTime - cycleStartTime
+
+resultsFile.write('Длительность записи: ' + str(cycleElapsedTime) + '\n')
+
+cycleStartTime = time.time()
+readAllCmd = 'find ' + dataFolderName + ' -type f -exec cat {} + > /dev/null'
+p = subprocess.Popen(readAllCmd, shell=True, stdout=subprocess.PIPE)
+cycleFinishTime = time.time()
+resultsFile.write('Длительность чтения: ' + str(cycleElapsedTime) + '\n')
+resultsFile.write('Записано файлов: ' + str(stats['filesWrittenCount'] - stats['filesDeletedCount']))
+resultsFile.write(' Записано байтов: ' + str(stats['bytesWrittenCount'] - stats['bytesDeletedCount']) + '\n\n')
+resultsFile.close()
+saveStats()
+os.remove(configFile)
