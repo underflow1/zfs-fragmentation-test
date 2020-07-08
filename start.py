@@ -84,6 +84,30 @@ def loadStats():
     stats.update(data)
     infile.close()
 
+
+
+def writeSummaryResults(data):
+    output = open(summaryResultsFilePath, 'a')
+    output.write(data + '\n')
+    output.close()
+
+def writeProgressResults(capacity):
+    fragCmd = 'zpool list ' + poolName + ' | tail -n 1 | awk \'{print $7}\''
+    iopingCmd = 'ioping ' + dataFolderName + '/' + generateRandomString(1) + ' -D -c 10 | tail -n 1 | awk \'{print $6$7}\'\'\t\' | tr -d \'\n\' >> ' + progressResultsFilePath + '; cat tab >> ' + progressResultsFilePath
+    writeSpeedCmd = 'zpool iostat ' + poolName + ' 30 2 | tail -n 1 | awk \'{print $7}\' >> ' + progressResultsFilePath
+    try:
+        frag = subprocess.Popen(fragCmd, shell=True, stdout=subprocess.PIPE)
+        fragResult = frag.stdout.read().decode("utf-8").rstrip()
+        output = open(progressResultsFilePath, 'a')
+        output.write(str(capacity) + '\t' + fragResult + '\t')
+        output.close()
+        ioping = subprocess.Popen(iopingCmd, shell=True, stdout=subprocess.PIPE)
+        writeSpeed = subprocess.Popen(writeSpeedCmd, shell=True, stdout=subprocess.PIPE)
+        return True
+    except Exception as e:
+        print('something nasty happened: ' + str(e))
+        exit(0)
+
 def initVars():
     global poolName
     try:
@@ -119,12 +143,20 @@ def initVars():
     # заканчивать когда будет гиг свободного места
     minFreeSpace = 1073741824
     global resultsFile
-    resultsFile = open(os.getcwd() + os.path.sep + 'results.zfs', 'a+')
-
+    resultsFile = open(os.getcwd() + os.path.sep + 'results.zfs', 'a')
 
 def firstRun():
     if not os.path.exists(configFile):
         print('this is first run\n')
+
+        output = open(progressResultsFilePath, 'a')
+        firstRunCmd = 'zfs get -H recordsize,compression ' + poolName
+        intro = subprocess.Popen(firstRunCmd, shell=True, stdout=subprocess.PIPE).stdout.read().decode("utf-8").rstrip()
+        header = "CAP	FRAG	IOPING	WSPEED"
+        output.write(intro + '\n')
+        output.write(header + '\n')
+        output.close()
+
         return True
     else:
         print('previous run was detected, continue filling up the pool\n')
@@ -166,7 +198,45 @@ def printStats():
 clear = lambda: os.system('clear')
 clear()
 stats = {}
-initVars()
+#initVars
+if True:
+    try:
+        poolName = sys.argv[1]
+    except Exception as e:
+        print('Pool name not chosen')
+        exit(0)
+    configFile = os.path.join(os.getcwd() + os.path.sep + poolName + '.zft')
+    stats['cycleNumber'] = 1
+    stats['filesWrittenCount'] = 0
+    stats['filesDeletedCount'] = 0
+    stats['bytesWrittenCount'] = 0
+    stats['bytesDeletedCount'] = 0
+    random.seed(0)
+    minFileSize = 1 #kb
+    maxFileSize = 2049 #kb
+    createdRandomBytes = generateRandomBytes(maxFileSize * 1024)
+    getMountPointCmd = 'zfs list -H -o mountpoint ' + poolName
+    p = subprocess.Popen(getMountPointCmd, shell=True, stdout=subprocess.PIPE)
+    mountpoint = p.stdout.read().decode("utf-8").rstrip()
+    dataFolderName = os.path.join(mountpoint + os.path.sep + 'zfs-fragmentation-test-data')
+    filesQueueSize = 100
+    fileRemovePercent = 0.3
+    # заканчивать когда будет гиг свободного места
+    minFreeSpace = 1073741824
+    summaryResultsFilePath = os.getcwd() + os.path.sep + 'results.zfs'
+    progressResultsFilePath = os.getcwd() + os.path.sep + 'progress_' + time.strftime("%Y%m%d%H%M%S") + '.zfs'
+    lastCapacity = 0
+    #resultsFile = open(os.getcwd() + os.path.sep + 'results.zfs', 'a')
+# endinit
+#initVars()
+
+def getCurrentCapacity():
+    getCurrentCapacityCmd = 'zpool list ' + poolName + ' | tail -n 1 | awk \'{print $8}\''
+    p = subprocess.Popen(getCurrentCapacityCmd, shell=True, stdout=subprocess.PIPE)
+    capacity = p.stdout.read().decode("utf-8").rstrip().strip('%')
+    return int(capacity)
+
+
 if not firstRun():
     loadStats()
 
@@ -174,7 +244,10 @@ cycleStartTime = time.time()
 while True:
     if not freeSpaceExists():
         print('Free space is ended. Finishing')
-        exit(0)
+        break
+    if lastCapacity < getCurrentCapacity():
+        writeProgressResults(getCurrentCapacity())
+        lastCapacity = getCurrentCapacity()
     rangeBegin = (stats['cycleNumber'] - 1) * filesQueueSize + 1
     rangeEnd = stats['cycleNumber'] * filesQueueSize + 1
 
@@ -198,15 +271,23 @@ while True:
 cycleFinishTime = time.time()
 cycleElapsedTime = cycleFinishTime - cycleStartTime
 
-resultsFile.write('Длительность записи: ' + str(cycleElapsedTime) + '\n')
+#resultsFile.write('Длительность записи: ' + str(cycleElapsedTime) + '\n')
+writeSummaryResults('Длительность записи: ' + str(cycleElapsedTime))
 
 cycleStartTime = time.time()
 readAllCmd = 'find ' + dataFolderName + ' -type f -exec cat {} + > /dev/null'
+readAllCmd='sleep 5'
 p = subprocess.Popen(readAllCmd, shell=True, stdout=subprocess.PIPE)
+p.wait()
 cycleFinishTime = time.time()
-resultsFile.write('Длительность чтения: ' + str(cycleElapsedTime) + '\n')
-resultsFile.write('Записано файлов: ' + str(stats['filesWrittenCount'] - stats['filesDeletedCount']))
-resultsFile.write(' Записано байтов: ' + str(stats['bytesWrittenCount'] - stats['bytesDeletedCount']) + '\n\n')
-resultsFile.close()
+cycleElapsedTime = cycleFinishTime - cycleStartTime
+
+writeSummaryResults('time is ' + time.strftime("%Y%m%d%H%M%S"))
+writeSummaryResults('Длительность чтения: ' + str(cycleElapsedTime))
+writeSummaryResults('Записано файлов: ' + str(stats['filesWrittenCount'] - stats['filesDeletedCount']) + ' Записано байтов: ' + str(stats['bytesWrittenCount'] - stats['bytesDeletedCount']) + '\n')
+#resultsFile.write('Длительность чтения: ' + str(cycleElapsedTime) + '\n')
+#resultsFile.write('Записано файлов: ' + str(stats['filesWrittenCount'] - stats['filesDeletedCount']))
+#resultsFile.write('Записано байтов: ' + str(stats['bytesWrittenCount'] - stats['bytesDeletedCount']) + '\n\n')
+#resultsFile.close()
 saveStats()
 os.remove(configFile)
